@@ -1,0 +1,6 @@
+# requirements.txt
+google-cloud-vision
+google-cloud-aiplatform
+python-dotenv
+networkx
+matplotlib

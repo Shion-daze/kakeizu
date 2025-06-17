@@ -1,0 +1,23 @@
+# .gitignore
+
+# Pythonの仮想環境
+venv/
+
+# Pythonのキャッシュファイル
+__pycache__/
+*.pyc
+
+# Macのシステムファイル
+.DS_Store
+
+# APIキーなどの秘密情報を記載した.envファイル
+.env
+
+# Google Cloudのサービスアカウントキー (JSONファイル)
+*.json
+
+# 入力データ（個人情報を含むPDF）
+input/
+
+# 出力データ（生成された画像や中間ファイル）
+output/

@@ -1,24 +1,28 @@
-# main.py (最終版)
+# main.py (パス修正版)
 
 import os
 import json
 from dotenv import load_dotenv
 from PIL import Image
 from io import BytesIO
+
 import vertexai
 from vertexai.generative_models import GenerativeModel
 from google.cloud import vision
 from pdf2image import convert_from_path
 
 def convert_pdf_to_images(pdf_path):
+    """PDFをページのリスト（PIL Imageオブジェクト）に変換する"""
     print(f"PDFを画像に変換しています: {pdf_path}")
     try:
+        # 300 DPIで高品質に変換
         return convert_from_path(pdf_path, dpi=300)
     except Exception as e:
         print(f"PDFから画像への変換中にエラーが発生しました: {e}")
         return []
 
 def ocr_image(client, image_data) -> str:
+    """単一の画像データからテキストを抽出する"""
     try:
         image = vision.Image(content=image_data)
         response = client.text_detection(image=image)
@@ -30,10 +34,12 @@ def ocr_image(client, image_data) -> str:
         return ""
 
 def parse_koseki_text_for_page(text: str, page_num: int) -> str:
-    print(f"  - Vertex AI (ページ {page_num}) の解析を開始...")
+    """【ページ解析用】テキストを解析し、JSONを生成する"""
     if not text.strip():
         print(f"  - ページ {page_num} はテキストが空のためスキップします。")
         return None
+
+    print(f"  - Vertex AI (ページ {page_num}) の解析を開始...")
     try:
         model = GenerativeModel("gemini-1.5-pro")
         prompt = f"""
@@ -42,9 +48,8 @@ def parse_koseki_text_for_page(text: str, page_num: int) -> str:
 
 # 重要ルール
 - **このページから直接読み取れる事実のみ**を抽出してください。
-- **最重要**: 人物の情報の中に「父 阿吹軍一」「母 ハナコ」「夫 輝男」「妻 榮子」のような記述を見つけたら、それは関係を示す決定的な証拠です。その情報をもとに、`relationships`の配列に`parent_child`または`spouse`の関係を**必ず追加**してください。
-- **推論**: 「長男」「長女」という記述は、そのページの戸主または筆頭者との親子関係を示唆します。これも`parent_child`として`relationships`に追加してください。
-- 氏名が不完全な場合（例：ハナコ）でも、文脈（例：阿吹軍一の妻）から氏が推測できれば補完してください（例：阿吹 ハナコ）。
+- **最重要**: 「父 阿吹軍一」「母 ハナコ」のような記述を見つけたら、それは親子関係を示す決定的な証拠です。必ず`relationships`に`parent_child`として追加してください。
+- 氏名が不完全な場合（例：ハナコ）でも、文脈から氏が推測できれば補完してください（例：阿吹 ハナコ）。
 
 # 抽出ルール
 - **persons**:
@@ -72,8 +77,11 @@ def parse_koseki_text_for_page(text: str, page_num: int) -> str:
         return None
 
 def process_document(pdf_path: str, output_dir: str):
+    """ドキュメント処理のメインフロー"""
     images = convert_pdf_to_images(pdf_path)
-    if not images: return
+    if not images:
+        return
+
     print(f"{len(images)}ページの画像に変換しました。")
     
     vision_client = vision.ImageAnnotatorClient()
@@ -82,13 +90,18 @@ def process_document(pdf_path: str, output_dir: str):
         page_num = i + 1
         print(f"--- ページ {page_num} の処理を開始 ---")
         
+        # PIL Imageをバイトデータに変換
         with BytesIO() as output:
             image.save(output, format="PNG")
             image_bytes = output.getvalue()
         
+        # 1. ページごとにOCR
         page_text = ocr_image(vision_client, image_bytes)
+        
+        # 2. ページごとにLLM解析
         json_str = parse_koseki_text_for_page(page_text, page_num)
         
+        # 3. ページごとの結果を保存
         if json_str:
             page_json_path = os.path.join(output_dir, f"page_{page_num}_data.json")
             try:
@@ -107,7 +120,10 @@ if __name__ == "__main__":
     input_dir = "input"
     output_dir = "output/pages"
     pdf_filename = "A.pdf"
+    
+    # ▼▼▼▼▼ ここが修正された行です ▼▼▼▼▼
     pdf_path = os.path.join(input_dir, pdf_filename)
+    
     os.makedirs(output_dir, exist_ok=True)
     process_document(pdf_path, output_dir)
     print("\n全ページの解析が完了しました。")

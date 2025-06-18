@@ -1,68 +1,102 @@
-# synthesize.py (最終版)
+#synthesis.py (AIによる統合・名寄せ機能付き最終版)
 
 import os
 import json
 import glob
-from collections import defaultdict
+from dotenv import load_dotenv
+import vertexai
+from vertexai.generative_models import GenerativeModel
 
-def synthesize_data(pages_dir: str, output_path: str):
-    print("ページデータの統合処理を開始します...")
-    page_data_map = {}
-    for file_path in sorted(glob.glob(os.path.join(pages_dir, "page_*_data.json"))):
-        page_num = int(os.path.basename(file_path).split('_')[1])
+# --- 設定 ---
+PAGES_INPUT_DIR = "output/pages"
+MERGED_JSON_OUTPUT_PATH = "output/family_tree_merged.json"
+
+def synthesize_with_ai(pages_dir, output_path):
+    """
+    AIの能力を使って、ページごとの断片的なJSONデータを
+    名寄せ・統合し、最終的な単一のJSONを生成する。
+    """
+    print("--- AIによる統合・名寄せ処理を開始 ---")
+    load_dotenv()
+    try:
+        vertexai.init(location="asia-northeast1")
+        model = GenerativeModel("gemini-1.5-pro")
+    except Exception as e:
+        print(f"Google Cloudの初期化に失敗: {e}"); return
+
+    json_files = sorted(glob.glob(os.path.join(pages_dir, "page_*_data.json")))
+    if not json_files:
+        print(f"エラー: '{pages_dir}' に解析済みJSONファイルが見つかりません。"); return
+
+    # 全ページの情報を一つのテキストにまとめる
+    all_pages_text = ""
+    for file_path in json_files:
+        page_num = os.path.basename(file_path).split('_')[1]
+        all_pages_text += f"\n\n--- ページ {page_num} の抽出結果 ---\n"
         with open(file_path, 'r', encoding='utf-8') as f:
-            page_data_map[page_num] = json.load(f)
+            all_pages_text += f.read()
 
-    all_persons_by_name = {}
-    for page_num in sorted(page_data_map.keys()):
-        for person_data in page_data_map[page_num].get("persons", []):
-            name = person_data.get("name")
-            if not name or len(name) < 2: continue
-            
-            # 名前の正規化（スペース除去）
-            name = name.replace(" ", "").replace("　", "")
-            person_data["name"] = name
-            
-            if name not in all_persons_by_name:
-                all_persons_by_name[name] = person_data
-            else:
-                for key, value in person_data.items():
-                    if value and (key not in all_persons_by_name[name] or not all_persons_by_name[name][key]):
-                        all_persons_by_name[name][key] = value
+    # AIへの最終統合を依頼するプロンプト
+    prompt = f"""
+# 命令書
+あなたは、戸籍情報を整理するデータアナリストです。以下に、複数ページから抽出された、重複を含む人物と関係性のJSONデータ群が提示されます。あなたの仕事は、これらの断片的な情報を分析し、**同一人物を特定（名寄せ）**し、**最終的な一つのクリーンな家系データ**としてJSON形式で出力することです。
 
-    all_relationships = []
-    for page_num in sorted(page_data_map.keys()):
-        for rel_data in page_data_map[page_num].get("relationships", []):
-            source = rel_data.get("source", "").replace(" ", "").replace("　", "")
-            target = rel_data.get("target", "").replace(" ", "").replace("　", "")
-            if source and target:
-                all_relationships.append({"source": source, "target": target, "type": rel_data["type"]})
+# 重要ルール
+- **名寄せ**: 「妻 ハナコ」と「阿吹 ハナコ」のように、文脈（関係性や日付）から同一人物だと判断できるものは、一つの人物情報に統合してください。
+- **情報統合**: 同一人物の情報が複数ある場合、それぞれの情報を補完しあって、最も完全な人物データを作成してください。（例：あるページには生年月日、別のページには死亡日が記載されている場合、両方を一つのデータにまとめる）
+- **IDの再採番**: 最終的な人物リストでは、各人物に1から始まるユニークな整数IDを振り直してください。
+- **関係性の再構築**: 関係性リストの`source`と`target`も、新しい整数IDを使って再構築してください。
 
-    final_persons = []
-    person_name_to_id = {}
-    current_id = 1
-    for name, person_data in sorted(all_persons_by_name.items()):
-        person_name_to_id[name] = current_id
-        person_data['id'] = current_id
-        final_persons.append(person_data)
-        current_id += 1
+# 入力データ（複数ページのJSONデータ群）:
+---
+{all_pages_text}
+---
 
-    final_relationships, rel_set = [], set()
-    for rel_data in all_relationships:
-        source_name, target_name = rel_data.get("source"), rel_data.get("target")
-        if source_name in person_name_to_id and target_name in person_name_to_id:
-            source_id, target_id = person_name_to_id[source_name], person_name_to_id[target_name]
-            rel_type = rel_data.get("type")
-            
-            rel_tuple = (rel_type, tuple(sorted((source_id, target_id)))) if rel_type == "spouse" else (rel_type, source_id, target_id)
-            if rel_tuple not in rel_set:
-                final_relationships.append({"source": source_id, "target": target_id, "type": rel_type})
-                rel_set.add(rel_tuple)
+# 出力形式 (最終的な単一のJSONのみを出力すること):
+{{
+  "persons": [
+    {{
+      "id": 1,
+      "name": "阿吹 利三郎",
+      "gender": "M",
+      "birth_date": "...",
+      "death_date": "...",
+      "notes": "..."
+    }},
+    ...
+  ],
+  "relationships": [
+    {{
+      "source": 1,
+      "target": 2,
+      "type": "spouse"
+    }},
+    ...
+  ]
+}}
+"""
 
-    final_data = {"persons": final_persons, "relationships": final_relationships}
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(final_data, f, ensure_ascii=False, indent=2)
-    print(f"✅ 統合完了！最終的なデータを '{output_path}' に保存しました。")
+    print("AIに最終的な統合を依頼しています。これには少し時間がかかる場合があります...")
+    try:
+        response = model.generate_content(prompt)
+        json_str = response.text
+        if json_str.strip().startswith("```json"):
+            json_str = json_str.strip()[7:-3].strip()
+        
+        # 最終的なJSONを検証して保存
+        final_data = json.loads(json_str)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(final_data, f, ensure_ascii=False, indent=2)
+        
+        print(f"✅ AIによる統合完了！名寄せされた最終データを '{output_path}' に保存しました。")
+
+    except Exception as e:
+        print(f"AIによる最終統合処理中にエラーが発生しました: {e}")
+        # エラーが発生した場合、生の応答を保存してデバッグしやすくする
+        with open("output/synthesis_error_response.txt", "w", encoding="utf-8") as f:
+            f.write(response.text)
+        print("エラー応答を 'output/synthesis_error_response.txt' に保存しました。")
+
 
 if __name__ == "__main__":
-    synthesize_data("output/pages", "output/family_tree_merged.json")
+    synthesize_with_ai(PAGES_INPUT_DIR, MERGED_JSON_OUTPUT_PATH)
